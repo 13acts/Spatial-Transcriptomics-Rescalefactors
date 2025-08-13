@@ -1,10 +1,13 @@
 import tkinter as tk
-from tkinter import filedialog
+from tkinter import filedialog, messagebox
 from PIL import Image, ImageDraw, ImageTk
 import numpy as np
 import anndata
+import scanpy as sc
+import os
+import json
 
-from shapely.geometry import MultiPoint, LineString
+from shapely.geometry import Point, MultiPoint, LineString
 from shapely.ops import unary_union, polygonize
 from scipy.spatial import Delaunay
 from sklearn.cluster import DBSCAN
@@ -37,7 +40,7 @@ class CollapsibleSection(tk.Frame):
 class SpotOverlayApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Visium Spot Overlay Viewer")
+        self.root.title("Spot Overlay Viewer")
 
         screen_width = self.root.winfo_screenwidth()
         screen_height = self.root.winfo_screenheight()
@@ -120,7 +123,7 @@ class SpotOverlayApp:
         #     variable=self.show_clusters,
         #     command=self.redraw
         # ).pack(anchor="w")
-        # self.shapely_alpha = self.create_slider_with_entry("alpha", 0.01, 10, 0.1, resolution=0.01)
+        # self.shapely_alpha = self.create_slider_with_entry("alpha", 0.01, 100, 0.1, resolution=0.01)
 
         self.scalef_multiplier_log2 = self.create_momentum_slider("scalef multiplier", initial=0.0, speed=0.2)
         self.shift_x = self.create_momentum_slider("Shift X", initial=0.0, speed=100)
@@ -134,7 +137,7 @@ class SpotOverlayApp:
         self.spot_radius_multiplier_log2 = self.create_momentum_slider("spot_diameter_fullres multiplier", initial=0.0, speed=0.2, parent=transform_section.content)
         self.scale_x_log2 = self.create_momentum_slider("Scale X", initial=0.0, speed=0.2, parent=transform_section.content)
         self.scale_y_log2 = self.create_momentum_slider("Scale Y", initial=0.0, speed=0.2, parent=transform_section.content)
-    
+
         self.rotation = self.create_rotation_control(parent=transform_section.content)
         self.flip_h = tk.IntVar()
         self.flip_v = tk.IntVar()
@@ -163,7 +166,6 @@ class SpotOverlayApp:
         ).pack(fill=tk.X, pady=5)
 
 
-
         self.anndata = None
         self.hires_image = None
         self.spots = None
@@ -187,7 +189,7 @@ class SpotOverlayApp:
 
     def change_zoom(self, factor):
         self.zoom_scale *= factor
-        self.redraw()
+        self.redraw(update_image=True)
 
     def on_canvas_press(self, event):
         self._dragging = True
@@ -363,6 +365,7 @@ class SpotOverlayApp:
 
         # Compute scale factor for spot coordinate display
         self.display_scale = image.width / original_size[0]
+        self.zoom_scale = 1
 
         # Load and scale coordinates
         self.spots = self.anndata.obsm["spatial"]
@@ -382,8 +385,9 @@ class SpotOverlayApp:
         #         self.spots_scaled, canvas_w, canvas_h
         #     )
 
+        self.update_window_title()
         self.redraw()
-    
+
     def resize_image(self, image, zoom_scale=1.0):
         max_w, max_h = self.max_display_size
         w, h = image.size
@@ -391,13 +395,13 @@ class SpotOverlayApp:
         new_size = (int(w * scale * zoom_scale), int(h * scale * zoom_scale))
 
         return image.resize(new_size, Image.LANCZOS)
-    
+
     def all_spots_outside_canvas(self, coords, canvas_w, canvas_h, margin=0):
         x_valid = (coords[:, 0] >= -margin) & (coords[:, 0] <= canvas_w + margin)
         y_valid = (coords[:, 1] >= -margin) & (coords[:, 1] <= canvas_h + margin)
         inside = x_valid & y_valid
         return not np.any(inside)
-    
+
     def normalize_spots_to_canvas(self, coords, canvas_width, canvas_height, padding=20):
         # 1. Get bounding box
         min_x, min_y = coords.min(axis=0)
@@ -407,7 +411,7 @@ class SpotOverlayApp:
         spot_width = max_x - min_x
         spot_height = max_y - min_y
 
-        scale_x = (canvas_width - 2 * padding) / spot_width 
+        scale_x = (canvas_width - 2 * padding) / spot_width
         scale_y = (canvas_height - 2 * padding) / spot_height
         scale = min(scale_x, scale_y)  # Uniform scale to preserve aspect
 
@@ -452,7 +456,7 @@ class SpotOverlayApp:
 
         return transformed
 
-    def draw_cluster_outlines(self, spots, min_samples=3):
+    def __draw_cluster_outlines(self, spots, min_samples=3):
         # Filter out NaNs
         valid = ~np.isnan(spots).any(axis=1)
         spots = spots[valid]
@@ -482,14 +486,36 @@ class SpotOverlayApp:
             if len(cluster_pts) < 3:
                 continue
 
-            shape = alpha_shape(cluster_pts, alpha=self.shapely_alpha.get())  # Adjust alpha as needed
+            shape = __alpha_shape(cluster_pts, alpha=self.shapely_alpha.get())  # Adjust alpha as needed
             if not shape.is_empty:
                 coords = list(mapping(shape)["coordinates"])
                 for ring in coords:
                     flat = [coord for point in ring for coord in point]
                     self.canvas.create_polygon(*flat, outline="red", fill="", width=2)
 
-    def render_spots_image(self):
+    def __draw_spots_outline(self, transformed_spots, r):
+        r = self.shapely_alpha.get()
+        # Only take valid points
+        valid_points = [(x, y) for x, y in transformed_spots if not np.isnan(x) and not np.isnan(y)]
+        if not valid_points:
+            return
+
+        # Expand each point into a small circle for more natural outline
+        circles = [Point(x, y).buffer(r) for x, y in valid_points]
+        merged_shape = unary_union(circles)
+
+        # Get exterior coordinates of the merged polygon
+        if merged_shape.geom_type == "Polygon":
+            coords = list(merged_shape.exterior.coords)
+            flat_coords = [coord for xy in coords for coord in xy]
+            self.canvas.create_line(*flat_coords, fill="blue", width=2)
+        else:
+            for poly in merged_shape.geoms:  # MultiPolygon
+                coords = list(poly.exterior.coords)
+                flat_coords = [coord for xy in coords for coord in xy]
+                self.canvas.create_line(*flat_coords, fill="blue", width=2)
+
+    def __render_spots_image(self):
         # Create blank RGBA image the size of your canvas
         img = Image.new("RGBA", (self.image_width, self.image_height), (0, 0, 0, 0))
         draw = ImageDraw.Draw(img)
@@ -501,20 +527,23 @@ class SpotOverlayApp:
 
         return ImageTk.PhotoImage(img)
 
-    def redraw(self):
-        self.canvas.delete("all")
-
+    def redraw(self, update_image=False):
         # Resize image according to zoom
-        scaled_image = self.resize_image(self.original_image, self.zoom_scale)
-        self.tk_image = ImageTk.PhotoImage(scaled_image)
-        self.canvas.create_image(0, 0, anchor=tk.NW, image=self.tk_image)
+        if update_image:
+            scaled_image = self.resize_image(self.original_image, self.zoom_scale)
+            self.tk_image = ImageTk.PhotoImage(scaled_image)
+            self.canvas.create_image(0, 0, anchor=tk.NW, image=self.tk_image)
 
-        # Draw image boundary
-        self.canvas.create_rectangle(
-            0, 0,
-            self.tk_image.width(), self.tk_image.height(),
-            outline="blue", width=2
-        )
+            # Draw image boundary
+            self.canvas.delete("canvas_frame")
+            self.canvas.create_rectangle(
+                0, 0,
+                self.tk_image.width(), self.tk_image.height(),
+                outline="blue", width=2, tags=("canvas_frame")
+            )
+
+        # Remove old spots without touching background
+        self.canvas.delete("spot")
 
         # Transform and draw spots (scale coordinates by zoom)
         transformed_spots = self.transform_spots(self.spots_scaled) * 2**self.scalef_multiplier_log2.get()
@@ -532,11 +561,12 @@ class SpotOverlayApp:
             for x, y in transformed_spots:
                 if not np.isnan(x) and not np.isnan(y):
                     oval = self.canvas.create_oval(x - r, y - r, x + r, y + r,
-                                                fill="blue", outline="black")
+                                                   fill="blue", outline="black", tags=("spot"))
                     self.spot_drawings.append(oval)
 
         # if self.show_clusters.get():
-        #     self.draw_cluster_outlines(transformed_spots)
+            # self.draw_cluster_outlines(transformed_spots)
+            # self.draw_spots_outline(transformed_spots, r)
 
     def export_transformed_data(self):
         import os
@@ -587,14 +617,9 @@ class SpotOverlayApp:
         with open(json_path, "w") as jf:
             json.dump(scalefactors, jf, indent=2)
         print(f"[INFO] Saved scalefactors to: {json_path}")
-
+        messagebox.showinfo("Export Complete", f"Data exported successfully:\n{out_dir}")
 
     def export_to_h5ad(self):
-        import os
-        from tkinter import filedialog
-        import json
-        import scanpy as sc
-
         if not hasattr(self, "anndata"):
             print("[ERROR] No AnnData object loaded.")
             return
@@ -609,8 +634,10 @@ class SpotOverlayApp:
         if not save_path:
             return
 
+        adata = self.anndata.copy()
+
         # Extract original coords
-        full_spots = self.anndata.obsm["spatial"]
+        full_spots = adata.obsm["spatial"]
         valid_mask = ~np.isnan(full_spots).any(axis=1)
         transformed_coords = np.full_like(full_spots, np.nan, dtype=np.float64)
 
@@ -624,21 +651,27 @@ class SpotOverlayApp:
         transformed_coords[valid_mask] = transformed
 
         # Update the AnnData object
-        self.anndata.obsm["spatial"] = transformed_coords
+        adata.obsm["spatial"] = transformed_coords
 
         # Update scalefactors if stored in uns
-        self.anndata.uns["spatial"][self.lib_id]["scalefactors"] = {
+        adata.uns["spatial"][self.lib_id]["scalefactors"] = {
             "spot_diameter_fullres": float(2 * self.spot_radius * 2**self.spot_radius_multiplier_log2.get()),
             "tissue_hires_scalef": float(scalefactor_hires),
             "tissue_lowres_scalef": 1.0
         }
 
         # Save updated AnnData
-        self.anndata.write_h5ad(save_path)
+        adata.write_h5ad(save_path)
         print(f"[INFO] Saved updated h5ad: {save_path}")
+        messagebox.showinfo("Export Complete", f"Data exported successfully:\n{save_path}")
 
+    def update_window_title(self):
+        if getattr(self, "lib_id", None):
+            self.root.title(f"Spot Overlay Viewer - {self.lib_id}")
+        else:
+            self.root.title("Spot Overlay Viewer")
 
-def alpha_shape(points, alpha):
+def __alpha_shape(points, alpha):
     if len(points) < 4:
         return MultiPoint(points).convex_hull
 
