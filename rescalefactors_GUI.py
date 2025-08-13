@@ -1,6 +1,6 @@
 import tkinter as tk
 from tkinter import filedialog
-from PIL import Image, ImageTk
+from PIL import Image, ImageDraw, ImageTk
 import numpy as np
 import anndata
 
@@ -468,11 +468,24 @@ class SpotOverlayApp:
                     flat = [coord for point in ring for coord in point]
                     self.canvas.create_polygon(*flat, outline="red", fill="", width=2)
 
+    def render_spots_image(self):
+        # Create blank RGBA image the size of your canvas
+        img = Image.new("RGBA", (self.image_width, self.image_height), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(img)
+
+        # Draw all spots
+        for x, y in self.spots:
+            r = self.spot_radius
+            draw.ellipse([x-r, y-r, x+r, y+r], fill=(255, 0, 0, 128))
+
+        return ImageTk.PhotoImage(img)
+
     def redraw(self):
         self.canvas.delete("all")
 
-        # Draw resized image
-        self.tk_image = ImageTk.PhotoImage(self.resize_image(self.original_image))
+        # Draw resized base image
+        resized_img = self.resize_image(self.original_image)
+        self.tk_image = ImageTk.PhotoImage(resized_img)
         self.canvas.create_image(0, 0, anchor=tk.NW, image=self.tk_image)
 
         # Draw image boundary
@@ -484,15 +497,23 @@ class SpotOverlayApp:
 
         # Transform and draw spots
         transformed_spots = self.transform_spots(self.spots_scaled) * 2**self.scalef_multiplier_log2.get()
-        r = self.spot_radius * 2**self.spot_radius_multiplier_log2.get() * self.scalefactor * 2**self.scalef_multiplier_log2.get() * self.display_scale
-        self.spot_drawings.clear()
+        r = (self.spot_radius * 2**self.spot_radius_multiplier_log2.get() *
+            self.scalefactor * 2**self.scalef_multiplier_log2.get() * self.display_scale)
 
         if self.show_spots.get():
+            # Create a transparent overlay same size as canvas
+            overlay_img = Image.new("RGBA", resized_img.size, (0, 0, 0, 0))
+            draw = ImageDraw.Draw(overlay_img)
+
+            # Draw spots onto the overlay
             for x, y in transformed_spots:
                 if not np.isnan(x) and not np.isnan(y):
-                    oval = self.canvas.create_oval(x - r, y - r, x + r, y + r,
-                                                fill="blue", outline="black")
-                    self.spot_drawings.append(oval)
+                    draw.ellipse((x - r, y - r, x + r, y + r),
+                                fill=(0, 0, 255, 128), outline=(0, 0, 0, 255))
+
+            # Convert overlay to PhotoImage and draw it
+            self.tk_spot_image = ImageTk.PhotoImage(overlay_img)
+            self.canvas.create_image(0, 0, anchor=tk.NW, image=self.tk_spot_image)
 
         # if self.show_clusters.get():
         #     self.draw_cluster_outlines(transformed_spots)
@@ -559,11 +580,12 @@ class SpotOverlayApp:
             return
 
         # Ask where to save the new h5ad
+        current_filename = f"{self.lib_id}.h5ad"
         save_path = filedialog.asksaveasfilename(
             title="Save transformed AnnData",
+            initialfile=os.path.basename(current_filename),
             defaultextension=".h5ad",
-            filetypes=[("H5AD files", "*.h5ad")]
-        )
+            filetypes=[("H5AD files", "*.h5ad"), ("All files", "*.*")])
         if not save_path:
             return
 
