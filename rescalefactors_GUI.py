@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import filedialog
+from tkinter import filedialog, messagebox
 from PIL import Image, ImageDraw, ImageTk
 import numpy as np
 import anndata
@@ -134,7 +134,7 @@ class SpotOverlayApp:
         self.spot_radius_multiplier_log2 = self.create_momentum_slider("spot_diameter_fullres multiplier", initial=0.0, speed=0.2, parent=transform_section.content)
         self.scale_x_log2 = self.create_momentum_slider("Scale X", initial=0.0, speed=0.2, parent=transform_section.content)
         self.scale_y_log2 = self.create_momentum_slider("Scale Y", initial=0.0, speed=0.2, parent=transform_section.content)
-    
+
         self.rotation = self.create_rotation_control(parent=transform_section.content)
         self.flip_h = tk.IntVar()
         self.flip_v = tk.IntVar()
@@ -383,7 +383,7 @@ class SpotOverlayApp:
         #     )
 
         self.redraw()
-    
+
     def resize_image(self, image, zoom_scale=1.0):
         max_w, max_h = self.max_display_size
         w, h = image.size
@@ -391,13 +391,13 @@ class SpotOverlayApp:
         new_size = (int(w * scale * zoom_scale), int(h * scale * zoom_scale))
 
         return image.resize(new_size, Image.LANCZOS)
-    
+
     def all_spots_outside_canvas(self, coords, canvas_w, canvas_h, margin=0):
         x_valid = (coords[:, 0] >= -margin) & (coords[:, 0] <= canvas_w + margin)
         y_valid = (coords[:, 1] >= -margin) & (coords[:, 1] <= canvas_h + margin)
         inside = x_valid & y_valid
         return not np.any(inside)
-    
+
     def normalize_spots_to_canvas(self, coords, canvas_width, canvas_height, padding=20):
         # 1. Get bounding box
         min_x, min_y = coords.min(axis=0)
@@ -407,7 +407,7 @@ class SpotOverlayApp:
         spot_width = max_x - min_x
         spot_height = max_y - min_y
 
-        scale_x = (canvas_width - 2 * padding) / spot_width 
+        scale_x = (canvas_width - 2 * padding) / spot_width
         scale_y = (canvas_height - 2 * padding) / spot_height
         scale = min(scale_x, scale_y)  # Uniform scale to preserve aspect
 
@@ -587,7 +587,7 @@ class SpotOverlayApp:
         with open(json_path, "w") as jf:
             json.dump(scalefactors, jf, indent=2)
         print(f"[INFO] Saved scalefactors to: {json_path}")
-
+        messagebox.showinfo("Export Complete", f"Data exported successfully:\n{out_dir}")
 
     def export_to_h5ad(self):
         import os
@@ -636,7 +636,7 @@ class SpotOverlayApp:
         # Save updated AnnData
         self.anndata.write_h5ad(save_path)
         print(f"[INFO] Saved updated h5ad: {save_path}")
-
+        messagebox.showinfo("Export Complete", f"Data exported successfully:\n{save_path}")
 
 def alpha_shape(points, alpha):
     if len(points) < 4:
