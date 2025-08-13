@@ -59,6 +59,7 @@ class SpotOverlayApp:
         # Drag n drop
         self._dragging = False
         self._drag_start = (0, 0)
+        # self.enable_canvas_zoom()
         self.canvas.bind("<ButtonPress-1>", self.on_canvas_press)
         self.canvas.bind("<B1-Motion>", self.on_canvas_drag)
         self.canvas.bind("<ButtonRelease-1>", self.on_canvas_release)
@@ -94,10 +95,12 @@ class SpotOverlayApp:
             side_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
         side_canvas.bind_all("<MouseWheel>", _on_mousewheel)
 
-
         # Load Data button
         load_btn = tk.Button(self.control_frame, text="Load AnnData", command=self.load_anndata)
         load_btn.pack(pady=10, fill="x")
+
+        # Zoom canvas
+        self.add_zoom_buttons()
 
         # Transformation sliders
         tk.Button(self.control_frame, text="Reset to Default", command=self.reset_transformations).pack(pady=10, fill="x")
@@ -167,6 +170,24 @@ class SpotOverlayApp:
         self.spot_ids = None
         self.tk_image = None
         self.spot_drawings = []
+
+    def add_zoom_buttons(self, parent=None):
+        parent = parent or self.control_frame
+
+        zoom_frame = tk.Frame(parent)
+        zoom_frame.pack(pady=5)
+
+        tk.Label(zoom_frame, text="Zoom:").pack(side=tk.LEFT)
+
+        tk.Button(zoom_frame, text="+", width=3, command=lambda: self.change_zoom(1.25)).pack(side=tk.LEFT)
+        tk.Button(zoom_frame, text="-", width=3, command=lambda: self.change_zoom(0.8)).pack(side=tk.LEFT)
+
+        # self.display_scale = 1
+        self.zoom_scale = 1
+
+    def change_zoom(self, factor):
+        self.zoom_scale *= factor
+        self.redraw()
 
     def on_canvas_press(self, event):
         self._dragging = True
@@ -266,7 +287,6 @@ class SpotOverlayApp:
 
         return value_var
 
-
     def create_rotation_control(self, parent=None):
         parent = parent or self.control_frame
         frame = tk.Frame(parent)
@@ -363,13 +383,14 @@ class SpotOverlayApp:
         #     )
 
         self.redraw()
+    
+    def resize_image(self, image, zoom_scale=1.0):
+        max_w, max_h = self.max_display_size
+        w, h = image.size
+        scale = min(max_w / w, max_h / h, 1.0)
+        new_size = (int(w * scale * zoom_scale), int(h * scale * zoom_scale))
 
-    def resize_image(self, image):
-            max_w, max_h = self.max_display_size
-            w, h = image.size
-            scale = min(max_w / w, max_h / h, 1.0)
-            new_size = (int(w * scale), int(h * scale))
-            return image.resize(new_size, Image.LANCZOS)
+        return image.resize(new_size, Image.LANCZOS)
     
     def all_spots_outside_canvas(self, coords, canvas_w, canvas_h, margin=0):
         x_valid = (coords[:, 0] >= -margin) & (coords[:, 0] <= canvas_w + margin)
@@ -483,9 +504,9 @@ class SpotOverlayApp:
     def redraw(self):
         self.canvas.delete("all")
 
-        # Draw resized base image
-        resized_img = self.resize_image(self.original_image)
-        self.tk_image = ImageTk.PhotoImage(resized_img)
+        # Resize image according to zoom
+        scaled_image = self.resize_image(self.original_image, self.zoom_scale)
+        self.tk_image = ImageTk.PhotoImage(scaled_image)
         self.canvas.create_image(0, 0, anchor=tk.NW, image=self.tk_image)
 
         # Draw image boundary
@@ -495,25 +516,24 @@ class SpotOverlayApp:
             outline="blue", width=2
         )
 
-        # Transform and draw spots
+        # Transform and draw spots (scale coordinates by zoom)
         transformed_spots = self.transform_spots(self.spots_scaled) * 2**self.scalef_multiplier_log2.get()
-        r = (self.spot_radius * 2**self.spot_radius_multiplier_log2.get() *
-            self.scalefactor * 2**self.scalef_multiplier_log2.get() * self.display_scale)
+        transformed_spots *= self.zoom_scale
+
+        # Spot radius also scaled by zoom
+        r = self.spot_radius * 2**self.spot_radius_multiplier_log2.get() \
+            * self.scalefactor * 2**self.scalef_multiplier_log2.get() \
+            * self.zoom_scale \
+            * self.display_scale
+
+        self.spot_drawings.clear()
 
         if self.show_spots.get():
-            # Create a transparent overlay same size as canvas
-            overlay_img = Image.new("RGBA", resized_img.size, (0, 0, 0, 0))
-            draw = ImageDraw.Draw(overlay_img)
-
-            # Draw spots onto the overlay
             for x, y in transformed_spots:
                 if not np.isnan(x) and not np.isnan(y):
-                    draw.ellipse((x - r, y - r, x + r, y + r),
-                                fill=(0, 0, 255, 128), outline=(0, 0, 0, 255))
-
-            # Convert overlay to PhotoImage and draw it
-            self.tk_spot_image = ImageTk.PhotoImage(overlay_img)
-            self.canvas.create_image(0, 0, anchor=tk.NW, image=self.tk_spot_image)
+                    oval = self.canvas.create_oval(x - r, y - r, x + r, y + r,
+                                                fill="blue", outline="black")
+                    self.spot_drawings.append(oval)
 
         # if self.show_clusters.get():
         #     self.draw_cluster_outlines(transformed_spots)
