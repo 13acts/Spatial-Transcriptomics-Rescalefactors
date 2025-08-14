@@ -370,9 +370,15 @@ class SpotOverlayApp:
         # Load and scale coordinates
         self.spots = self.anndata.obsm["spatial"]
         self.spots = self.spots[~np.isnan(self.spots).any(axis=1)]
-        self.scalefactor = img_data[lib_id]["scalefactors"]["tissue_hires_scalef"]
+        try:
+            self.spot_radius = img_data[lib_id]["scalefactors"]["spot_diameter_fullres"] / 2
+        except KeyError:
+            self.spot_radius = 1
+        try:
+            self.scalefactor = img_data[lib_id]["scalefactors"]["tissue_hires_scalef"]
+        except KeyError:
+            self.scalefactor = 1
         self.spots_scaled = self.spots * self.scalefactor * self.display_scale
-        self.spot_radius = img_data[lib_id]["scalefactors"]["spot_diameter_fullres"] / 2
 
         self.original_spots_scaled = self.spots_scaled.copy()
 
@@ -654,11 +660,13 @@ class SpotOverlayApp:
         adata.obsm["spatial"] = transformed_coords
 
         # Update scalefactors if stored in uns
-        adata.uns["spatial"][self.lib_id]["scalefactors"] = {
+        if "scalefactors" not in adata.uns["spatial"][self.lib_id]:
+            adata.uns["spatial"][self.lib_id]["scalefactors"] = {}
+        adata.uns["spatial"][self.lib_id]["scalefactors"].update({
             "spot_diameter_fullres": float(2 * self.spot_radius * 2**self.spot_radius_multiplier_log2.get()),
             "tissue_hires_scalef": float(scalefactor_hires),
             "tissue_lowres_scalef": 1.0
-        }
+        })
 
         # Save updated AnnData
         adata.write_h5ad(save_path)
