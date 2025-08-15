@@ -6,6 +6,7 @@ import anndata
 import scanpy as sc
 import os
 import json
+import gc
 
 from shapely.geometry import Point, MultiPoint, LineString
 from shapely.ops import unary_union, polygonize
@@ -332,6 +333,12 @@ class SpotOverlayApp:
         file_path = filedialog.askopenfilename(filetypes=[("h5ad files", "*.h5ad")])
         if not file_path:
             return
+
+        # Clean cache
+        self.anndata = None
+        self.tk_image = None
+        self.canvas.delete("all")
+        gc.collect()
 
         self.anndata = anndata.read_h5ad(file_path)
 
@@ -705,4 +712,5 @@ def __alpha_shape(points, alpha):
 if __name__ == "__main__":
     root = tk.Tk()
     app = SpotOverlayApp(root)
+    print('[INFO] App started\n')
     root.mainloop()
