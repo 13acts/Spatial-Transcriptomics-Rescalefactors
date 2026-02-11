@@ -166,6 +166,16 @@ class SpotOverlayApp:
             activeforeground="white"
         ).pack(fill=tk.X, pady=5)
 
+        tk.Button(
+            self.control_frame,
+            text="Export affine matrix",
+            bg="#007BFF",
+            fg="white",
+            command=self.export_to_affine_matrix,
+            activebackground="#0056b3",  # Darker blue on hover/click
+            activeforeground="white"
+        ).pack(fill=tk.X, pady=5)
+
 
         self.anndata = None
         self.hires_image = None
@@ -679,6 +689,70 @@ class SpotOverlayApp:
         adata.write_h5ad(save_path)
         print(f"[INFO] Saved updated h5ad: {save_path}")
         messagebox.showinfo("Export Complete", f"Data exported successfully:\n{save_path}")
+
+    def export_to_affine_matrix(self):
+        import os
+        from tkinter import filedialog, messagebox
+        import json
+        import numpy as np
+
+        # Ask where to save the new h5ad
+        current_filename = f"{self.lib_id}_affine_matrix_3x3.csv"
+        save_path = filedialog.asksaveasfilename(
+            title="Save affine matrix",
+            initialfile=os.path.basename(current_filename),
+            defaultextension=".csv",
+            filetypes=[("CSV", "*.csv"), ("All files", "*.*")])
+        if not save_path:
+            return
+
+        # Original coordinates
+        full_spots = self.anndata.obsm["spatial"]
+        valid_mask = ~np.isnan(full_spots).any(axis=1)
+
+        # Transform only valid spots
+        valid_spots = full_spots[valid_mask]
+        scalefactor_hires = self.scalefactor * 2**self.scalef_multiplier_log2.get()
+
+        # Apply existing transform
+        spots_scaled = valid_spots.astype(np.float64, copy=True)
+        transformed = self.transform_spots(spots_scaled, mode="export")
+
+        # --- Estimate 3x3 affine matrix from original -> transformed ---
+        # Solve: [x y 1] * A^T = [x' y 1]
+        n = valid_spots.shape[0]
+        ones = np.ones((n, 1))
+        src = np.hstack([valid_spots, ones])          # (n, 3)
+        dst = np.hstack([transformed, ones])          # (n, 3)
+
+        # Least-squares solution
+        affine_matrix, _, _, _ = np.linalg.lstsq(src, dst, rcond=None)
+        affine_matrix = affine_matrix.T               # 3x3 standard form
+
+        # Save affine matrix as TSV
+        with open(save_path, "w") as f:
+            for row in affine_matrix:
+                f.write(",".join(f"{v:.8f}" for v in row) + "\n")
+        print(f"[INFO] Saved affine matrix to: {save_path}")
+
+        # Save affine matrix as JSON
+        # matrix_json_path = os.path.join(out_dir, "affine_matrix_3x3.json")
+        # with open(matrix_json_path, "w") as jf:
+        #     json.dump(affine_matrix.tolist(), jf, indent=2)
+        # print(f"[INFO] Saved affine matrix JSON to: {matrix_json_path}")
+
+        # Save scalefactors.json
+        # json_path = os.path.join(out_dir, "scalefactors_json.json")
+        # scalefactors = {
+        #     "spot_diameter_fullres": 2 * self.spot_radius * 2**self.spot_radius_multiplier_log2.get(),
+        #     "tissue_hires_scalef": float(scalefactor_hires),
+        #     "tissue_lowres_scalef": 1.0
+        # }
+        # with open(json_path, "w") as jf:
+        #     json.dump(scalefactors, jf, indent=2)
+        # print(f"[INFO] Saved scalefactors to: {json_path}")
+
+        messagebox.showinfo("Export Complete", f"Affine matrix exported successfully:\n{save_path}")
 
     def update_window_title(self):
         if getattr(self, "lib_id", None):
