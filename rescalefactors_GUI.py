@@ -168,10 +168,10 @@ class SpotOverlayApp:
 
         tk.Button(
             self.control_frame,
-            text="Export affine matrix",
+            text="Export affine matrix for spots",
             bg="#007BFF",
             fg="white",
-            command=self.export_to_affine_matrix,
+            command=self.export_to_affine_matrix_spots,
             activebackground="#0056b3",  # Darker blue on hover/click
             activeforeground="white"
         ).pack(fill=tk.X, pady=5)
@@ -690,14 +690,9 @@ class SpotOverlayApp:
         print(f"[INFO] Saved updated h5ad: {save_path}")
         messagebox.showinfo("Export Complete", f"Data exported successfully:\n{save_path}")
 
-    def export_to_affine_matrix(self):
-        import os
-        from tkinter import filedialog, messagebox
-        import json
-        import numpy as np
-
+    def export_to_affine_matrix_spots(self):
         # Ask where to save the new h5ad
-        current_filename = f"{self.lib_id}_affine_matrix_3x3.csv"
+        current_filename = f"{self.lib_id}_affine_matrix_3x3_spot.csv"
         save_path = filedialog.asksaveasfilename(
             title="Save affine matrix",
             initialfile=os.path.basename(current_filename),
